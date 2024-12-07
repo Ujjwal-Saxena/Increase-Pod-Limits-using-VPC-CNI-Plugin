@@ -1,0 +1,166 @@
+In EKS, there is a default limit for a limited amount of pods to get scheduled on worker nodes. This usually ends up in under-utilization of instances inspite of having available CPU, memory and also when there are sufficient available IPs in the subnets. This also adds to additional costs incurred for the new instances launched due to scaling operation for scheduling the remaining pods.
+
+This document describes steps to increase the pod limits on instances using VPC-CNI plugin only.
+
+INTRODUCTION
+=============
+In EKS, there is a default limit for a specific amount of pods that can be scheduled on worker nodes. This feature is defined by the number of ENIs that are associated with each instance type.
+
+AWS EKS, by default uses VPC CNI plugin to assign IP addresses to the pods.
+
+Hence, even if the current subnet has a larger number of available IPs, the number of pods that can be scheduled on a worker node is constrained by the number of available IPs for the worker node’s elastic network interface (ENI).
+
+=======
+ISSUE
+=======
+=> This default configuration, leads to under-utilization of instances inspite of having available compute resources (CPU and memory) in the worker nodes and also when there are sufficient amount of available IPs in the subnets.
+
+=> Additionally, this even adds to the additional costs incurred for the new number of instances that are scaled up due to scaling operation for scheduling other set of pods.
+
+=> Due to these default configurations, there are plenty of other alternatives of VPC-CNI plugin available (weave-net, flannel, cilium) that customers have to switch to, in order to allocate much more amount of pods that can be scheduled on worker nodes.
+
+=========
+SOLUTION
+=========
+In this document, I am sharing solution steps that can be used to increase the amount of pods limit on worker nodes using VPC-CNI plugin only.
+
+For Example:- In an EKS cluster having worker nodes of type “t3.medium”, the total number of pods that can be scheduled on a node can be calculated using below:
+-----------------------------------------
+=> {  N X ( M - 1 ) }  + 2 
+
+N => Number of ENI
+M => Number of Private IP addresses 
+-----------------------------------------
+
+=> Hence, the total number of pods that can be scheduled on "T3.medium" node =>  { 3 X (6-1) } +2 => 17
+However, as per official kubernetes documentation, 110 pods can be scheduled on a worker node.
+
+=======================
+REPLICATION PROCEDURE:
+=======================
+I replicated the scenario at my end and was successfully able to increase the number of pods to 110 in the instance type-“T3.medium” despite of the maximum limit of 17 pods for “T3.medium” instance type.
+
+Please refer to below pre-requisites before following the solution steps:
+
+PRE-REQUISITES
+[+]  A Managed Nodegroup should be present within cluster.
+[+]  AWS Nitro-based nodes can be used. Instances that aren't Nitro-based continue to allocate individual secondary IP addresses, but have a significantly lower number of IP addresses to assign to Pods than Nitro-based instances.
+[+]  Once you configure the add-on to assign prefixes to network interfaces, you can't downgrade your Amazon VPC CNI add-on to a version lower than 1.9.0 (or 1.10.1) without removing all nodes in all node groups in your cluster.
+[+]  Your VPC must have enough available IPv4 address blocks to support this capability.
+[+]  It is recommended to scale out all the worker nodes in EKS cluster i.e no worker nodes should be running in your cluster. 
+
+STEPS:
+======
+
+STEP-1
+-------
+=> Copy the current existing launch template name used by your worker nodes from the EC2 console.
+
+STEP-2
+-------
+=> Then, navigate to the “launch template” section in EC2 Console and select “Create Launch template” option.
+
+=> Search for “Source template” dropdown option and enter the launch template name copied in the previous step.
+
+=> At the bottom of the page, update the User data script as below:
+```````````````````````````````````````
+--max-pods=110’ --use-max-pods false
+```````````````````````````````````````
+
+=> So, the final Userdata script should be as follows:
+```````````````````
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="//"
+
+--//
+Content-Type: text/x-shellscript; charset="us-ascii"
+#!/bin/bash
+set -ex
+B64_CLUSTER_CA=LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUMvakNDQWVhZ0F3SUJBZ0lCQURBTkJna3Foa2lHOXcwQkFRc0ZBREFWTVJNd0VRWURWUVFERXdwcmRXSmwKY201bGRHVnpNQjRYRFRJek1EVXlNekV6TlRReE5Wb1hEVE16TURVeU1ERXpOVFF4TlZvd0ZURVRNQkVHQTFVRQpBeE1LYTNWaVpYSnVaWFJsY3pDQ0FTSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnRVBBRENDQVFvQ2dnRUJBTnFQCkg0NlFNajM5YUpybkNUYm9CNDNBL21zUVhNRnRJNVZwV2xPdFlRY1NaMHh1V0JCeTFJQVBsVGhvRUVaaUREUDYKUXpMRU5WdTBHNnltNm1UQ29mbk5YZkNkeUpCd2sxUkJLbnFPbWh0dDEyRU9WUlVVMjBqeGllOWpFaW5WTVlCNQpVTW9sbnh3UTlCZHBTclkvV2VTVm1TbDE5d091NlJ2bHNjYTRCcEk1M3Y1WHZrUmI0dm5IYm1haHhYdWxkaEsvCndaUEwzWUMxMS8wRkgwamV0ZGxsSWFZWkw5STRlZmxEOTRQMm0reWRIRVpQaERwMmlIM0Q1RUtBUFRraVZIUW4KWHZQRi9sZlAyQzhId2xoZ1ZDUnRMYkNDSS91Y29STXpxOWZWeVI2WmcrbUJCam5pRUZtRDZ2RGNwTkNCb0o1MApXZXRRT0R4VjFnTmNVeUtBS0VzQ0F3RUFBYU5aTUZjd0RnWURWUjBQQVFIL0JBUURBZ0trTUE4R0ExVWRFd0VCCi93UUZNQU1CQWY4d0hRWURWUjBPQkJZRUZCdjN2WnBzUEI4QUhPY3h5MHg2N2hObk0wVzhNQlVHQTFVZEVRUU8KTUF5Q0NtdDFZbVZ5Ym1WMFpYTXdEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBRmZzd01PZWhQM21oZXJNNUJrbQp0aVRPZDNOM2NaOTRxbUh6TWFKRnlxMmdEVkdZcFhYbE1oUDU0TjRRTnNpMCtQWXJuTk9ncmtmWWtxK0htdEV5CjV4OVhReHRqWUFyVWYrZnIyK0FKUjlVSWpxenU2N0ZKcmhIdEJxYUROMVd3alNUSjZZL2duOWZGekR6KzhUdlYKVU5qbmpXb0hBd3Y2WUljUVNwWkFNVkhiUklkbkF0TFlpQWpOaEYvZGd0dVo3N2t1clNsMEdQRWk5bHl5TmloVQpEcHVwNkcvcFNSM1FIaVdrdHRFZ0t5RmdPWWhYTzQ2SmVudUVaKzVFSVdhZ2pab1VGVEVsaU9zbGtuSFlwZ2hoCk8zNEJ1QTFUSWlmWTlzUEErdytVQkhiNU1QOWdZck9RSWhJVjNubFgrQWEvaHNtMk10VnVJNjNwVzZzaC9UZXAKLzVVPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+API_SERVER_URL=https://368B8C9045A311E7025DE50C41B4FE46.gr7.us-east-1.eks.amazonaws.com
+K8S_CLUSTER_DNS_IP=10.100.0.10
+/etc/eks/bootstrap.sh test-123 --kubelet-extra-args '--node-labels=eks.amazonaws.com/sourceLaunchTemplateVersion=1,alpha.eksctl.io/cluster-name=test-123,alpha.eksctl.io/nodegroup-name=ec2-mng,eks.amazonaws.com/nodegroup-image=ami-006896008e984456c,eks.amazonaws.com/capacityType=ON_DEMAND,eks.amazonaws.com/nodegroup=ec2-mng,eks.amazonaws.com/sourceLaunchTemplateId=lt-058875d826c4a962d --max-pods=110' --b64-cluster-ca $B64_CLUSTER_CA --apiserver-endpoint $API_SERVER_URL --dns-cluster-ip $K8S_CLUSTER_DNS_IP --use-max-pods false
+
+--//--
+````````````````````
+
+=> Then, under the “Advanced” section >> “IAM Instance Profile” dropdown option >> select “Don't include in launch template” option.
+
+NOTE :=> We are not including any Instance Profile above to avoid conflicts during instance creation using the launch template within EKS cluster.
+
+=> Save and create launch template.
+
+
+ STEP-3
+--------
+=> Now, create an Nginx deployment with 120 replicas as below:
+
+```````````````````````
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 120
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+`````````````````````
+
+=> Then, deploy it using below :
+```````````
+> kubectl apply -f nginx.yaml
+```````````
+=> You should see all 120 pods in “Pending” state.
+
+STEP-4
+-------
+=> Now, Navigate to EKS Console >> Compute section.
+
+=> Select “Create Nodegroup” option and create a nodegroup with below configurations:
+`````````````
+- Launch template : <newly created Launch template”
+- Instance Type : T3.medium
+- Desired Size : 1
+- Minimum Size : 1
+- Maximum Size : 2 
+`````````````
+
+=> Edit VPC-CNI to make use of more number of ENIs to allocate additional pods by updating below parameters using AWS-CLI:
+``````````
+> kubectl set env daemonset aws-node -n kube-system ENABLE_PREFIX_DELEGATION=true
+
+> kubectl set env ds aws-node -n kube-system WARM_PREFIX_TARGET=1
+
+`````````
+=> Once nodes are up and running, you will be able to see that “t3.medium” instance can have 110 pods in running state (As specified in launch template), despite of having 17 pod limit by default.
+
+=> You can check the status of all the “Running” pods using below command:
+``````````
+> kubectl get pods -A | grep -i running | wc -l
+
+110
+``````````
+In this way you can override the default pod limits for all the worker nodes present in EKS cluster.
+
+Additionally, please refer to Increase IP addresses in instances for more information.
+
+REFERENCES
+===========
+[1] Number of ENI per instance type : https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html#AvailableIpPerENI
+
+[2] Considerations for large clusters : https://kubernetes.io/docs/setup/best-practices/cluster-large/
+
+[3] Increase IP addresses in Instances : https://docs.aws.amazon.com/eks/latest/userguide/cni-increase-ip-addresses.html
